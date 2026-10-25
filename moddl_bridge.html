@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline';">
+<title>MODDL:INIT</title>
+</head>
+<body>
+<!--
+  Хранилище настроек modDL+. Скрытая HTML-панель игры открывает эту страницу,
+  передаёт команды в адресе после "#", а ответ получает через заголовок страницы.
+  Настройки лежат в localStorage этой страницы на вашем компьютере.
+-->
+<script>
+(function () {
+    "use strict";
+    var KEY = "moddl_settings";
+
+    function reply(id, op, data) {
+        document.title = "MODDL:RES:" + id + ":" + JSON.stringify({ op: op, data: data });
+    }
+
+    try {
+        localStorage.setItem("__moddl_probe__", "1");
+        localStorage.removeItem("__moddl_probe__");
+    } catch (e) {
+        document.title = "MODDL:ERROR:" + (e && e.message ? e.message : e);
+        return;
+    }
+
+    function handle() {
+        var raw = location.hash ? location.hash.slice(1) : "";
+        if (!raw) return;
+        var msg;
+        try { msg = JSON.parse(decodeURIComponent(raw)); } catch (e) { return; }
+        if (!msg || typeof msg.id !== "string" || !/^\d+$/.test(msg.id)) return;
+        if (msg.op === "load") {
+            var data = null;
+            try { data = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { data = null; }
+            reply(msg.id, "load", data);
+        } else if (msg.op === "save" && msg.data && typeof msg.data === "object") {
+            localStorage.setItem(KEY, JSON.stringify(msg.data));
+            reply(msg.id, "save", true);
+        }
+    }
+
+    window.addEventListener("hashchange", handle);
+    document.title = "MODDL:READY";
+    handle();
+})();
+</script>
+</body>
+</html>
