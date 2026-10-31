@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self'; connect-src https://api.deadlock-api.com;">
 <title>MODDL:INIT</title>
 </head>
 <body>
@@ -10,14 +10,15 @@
   Служебная страница moDL+. Скрытая HTML-панель игры открывает её, передаёт
   команды в адресе после "#", а ответ получает через заголовок страницы.
   1) Хранит настройки в localStorage — на компьютере игрока, никуда не отправляя.
-  2) Проигрывает озвучку moDL+ из папки sounds/ рядом со страницей.
+  2) (Раньше проигрывал озвучку moDL+ — она удалена, список звуков пуст.)
+  3) Для функции «Профили игроков» запрашивает у api.deadlock-api.com публичную статистику игрока,
+     чей профиль открыт. Других адресов браузер этой странице открывать не даст (см. connect-src выше).
 -->
 <script>
 (function () {
     "use strict";
     var KEY = "moddl_settings";
-    var SOUNDS = ["first_blood", "double_kill", "triple_kill", "quadra_kill",
-                  "ritual_breaker", "patrons_wrath", "total_eclipse"];
+    var SOUNDS = [];   // своей озвучки у moDL+ больше нет
     var audio = {};
 
     function reply(id, op, data) {
@@ -46,13 +47,42 @@
         localStorage.removeItem("__moddl_probe__");
     } catch (e) { storageOk = false; }
 
+    // Заголовок страницы короткий (около 4000 символов), поэтому только нужные числа:
+    // герои [id, матчи, победы, время, У, С, П, добивания, отказы, души, урон, урон целям, точность %, в голову %],
+    // матчи [герой, начало, исход, длительность, У, С, П, души] — 9 последних.
+    function R(n) { return Math.round(n || 0); }
+    function profile(acc) {
+        function get(path) {
+            return fetch("https://api.deadlock-api.com/v1/players/" + acc + path).then(function (r) {
+                if (!r.ok) throw "HTTP " + r.status;
+                return r.json();
+            });
+        }
+        Promise.all([get("/hero-stats"), get("/match-history")]).then(function (v) {
+            var heroes = v[0].map(function (x) {
+                var m = (x.time_played || 0) / 60;
+                return [x.hero_id, x.matches_played, x.wins, x.time_played, x.kills, x.deaths, x.assists,
+                    R(x.last_hits_per_min * m), R(x.denies_per_min * m), R(x.networth_per_min * m),
+                    x.total_player_damage, R(x.obj_damage_per_min * m), R(x.accuracy * 100), R(x.crit_shot_rate * 100)];
+            });
+            var matches = v[1].slice().sort(function (p, q) { return q.start_time - p.start_time; }).slice(0, 9).map(function (x) {
+                return [x.hero_id, x.start_time, x.player_match_outcome, x.match_duration_s, x.player_kills, x.player_deaths, x.player_assists, x.net_worth];
+            });
+            document.title = "MODDL:PF:" + acc + ":" + JSON.stringify({ h: heroes, m: matches, n: v[1].length });
+        }).catch(function (e) {
+            document.title = "MODDL:PF:" + acc + ":ERR:" + e;
+        });
+    }
+
     function handle() {
         var raw = location.hash ? location.hash.slice(1) : "";
         if (!raw) return;
         var msg;
         try { msg = JSON.parse(decodeURIComponent(raw)); } catch (e) { return; }
         if (!msg || typeof msg.id !== "string" || !/^\d+$/.test(msg.id)) return;
-        if (msg.op === "play") {
+        if (msg.op === "profile") {
+            if (/^\d+$/.test(String(msg.acc))) profile(String(msg.acc));
+        } else if (msg.op === "play") {
             reply(msg.id, "play", play(String(msg.name), msg.vol));
         } else if (!storageOk) {
             reply(msg.id, msg.op, null);
