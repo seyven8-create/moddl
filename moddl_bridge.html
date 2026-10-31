@@ -49,8 +49,25 @@
 
     // Заголовок страницы короткий (около 4000 символов), поэтому только нужные числа:
     // герои [id, матчи, победы, время, У, С, П, добивания, отказы, души, урон, урон целям, точность %, в голову %],
-    // матчи [герой, начало, исход, длительность, У, С, П, души] — 9 последних.
+    // матчи [герой, начало, исход, длительность, У, С, П, души, номер матча] — по 8 на страницу.
     function R(n) { return Math.round(n || 0); }
+    var PAGE = 8, history = {};
+    function row(x) { return [x.hero_id, x.start_time, x.player_match_outcome, x.match_duration_s, x.player_kills, x.player_deaths, x.player_assists, x.net_worth, String(x.match_id)]; }
+    function sorted(list) { return list.slice().sort(function (p, q) { return q.start_time - p.start_time; }); }
+    // Страница матчей игрока (все герои или один). История хранится здесь: в заголовок вся не влезет.
+    function matches(acc, page, hero) {
+        function send(list) {
+            var f = hero ? list.filter(function (x) { return x.hero_id === hero; }) : list;
+            document.title = "MODDL:PFM:" + acc + ":" + JSON.stringify({ m: f.slice(page * PAGE, page * PAGE + PAGE).map(row), n: f.length, p: page, hero: hero });
+        }
+        if (history[acc]) { send(history[acc]); return; }
+        fetch("https://api.deadlock-api.com/v1/players/" + acc + "/match-history").then(function (r) {
+            if (!r.ok) throw "HTTP " + r.status;
+            return r.json();
+        }).then(function (list) { history[acc] = sorted(list); send(history[acc]); }).catch(function (e) {
+            document.title = "MODDL:PF:" + acc + ":ERR:" + e;
+        });
+    }
     function profile(acc) {
         function get(path) {
             return fetch("https://api.deadlock-api.com/v1/players/" + acc + path).then(function (r) {
@@ -65,10 +82,8 @@
                     R(x.last_hits_per_min * m), R(x.denies_per_min * m), R(x.networth_per_min * m),
                     x.total_player_damage, R(x.obj_damage_per_min * m), R(x.accuracy * 100), R(x.crit_shot_rate * 100)];
             });
-            var matches = v[1].slice().sort(function (p, q) { return q.start_time - p.start_time; }).slice(0, 9).map(function (x) {
-                return [x.hero_id, x.start_time, x.player_match_outcome, x.match_duration_s, x.player_kills, x.player_deaths, x.player_assists, x.net_worth];
-            });
-            document.title = "MODDL:PF:" + acc + ":" + JSON.stringify({ h: heroes, m: matches, n: v[1].length });
+            history[acc] = sorted(v[1]);
+            document.title = "MODDL:PF:" + acc + ":" + JSON.stringify({ h: heroes, m: history[acc].slice(0, PAGE).map(row), n: v[1].length });
         }).catch(function (e) {
             document.title = "MODDL:PF:" + acc + ":ERR:" + e;
         });
@@ -82,6 +97,8 @@
         if (!msg || typeof msg.id !== "string" || !/^\d+$/.test(msg.id)) return;
         if (msg.op === "profile") {
             if (/^\d+$/.test(String(msg.acc))) profile(String(msg.acc));
+        } else if (msg.op === "matches") {
+            if (/^\d+$/.test(String(msg.acc))) matches(String(msg.acc), Math.max(0, Number(msg.page) || 0), Number(msg.hero) || 0);
         } else if (msg.op === "play") {
             reply(msg.id, "play", play(String(msg.name), msg.vol));
         } else if (!storageOk) {
