@@ -121,6 +121,10 @@
             reply(msg.id, "play", play(String(msg.name), msg.vol));
         } else if (!storageOk) {
             reply(msg.id, msg.op, null);
+        } else if (msg.op === "loadp") {
+            // Настройки частями: заголовок страницы ограничен, а со своими сетками героев настройки большие.
+            var raw = localStorage.getItem(KEY) || "null", off = Math.max(0, Number(msg.off) || 0);
+            document.title = "MODDL:RES:" + msg.id + ":" + JSON.stringify({ op: "loadp", s: raw.substr(off, 1800), more: off + 1800 < raw.length });
         } else if (msg.op === "load") {
             var data = null;
             try { data = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { data = null; }
