@@ -48,17 +48,34 @@
     } catch (e) { storageOk = false; }
 
     // Заголовок страницы короткий (около 4000 символов), поэтому только нужные числа:
-    // герои [id, матчи, победы, время, У, С, П, добивания, отказы, души, урон, урон целям, точность %, в голову %],
-    // матчи [герой, начало, исход, длительность, У, С, П, души, номер матча] — по 8 на страницу.
+    // герои [id, матчи, победы, время (мин), У, С, П, добивания, отказы, души (сотни), урон (сотни), урон целям (сотни), точность %, в голову %,
+    //        лучший в матче (раз), матчей с оценкой (0 = все), получено урона (сотни), усиления, первое усиление (десятки с)],
+    // матчи [герой, 0, исход, длительность, У, С, П, души, номер матча] — по 8 на страницу.
     function R(n) { return Math.round(n || 0); }
     var PAGE = 8, history = {};
-    function row(x) { return [x.hero_id, x.start_time, x.player_match_outcome, x.match_duration_s, x.player_kills, x.player_deaths, x.player_assists, x.net_worth, String(x.match_id)]; }
+    // Сводка 20 последних матчей: [победы, матчей, У, С, П, души (средние), лучшие души, герой лучшего, начало последнего, серия (+победы / -поражения)].
+    function summary(list) {
+        var l = list.slice(0, 20), n = l.length, s = [0, n, 0, 0, 0, 0, 0, 0, n ? l[0].start_time : 0, 0];
+        l.forEach(function (x) {
+            if (x.player_match_outcome === 1) s[0]++;
+            s[2] += x.player_kills || 0; s[3] += x.player_deaths || 0; s[4] += x.player_assists || 0; s[5] += x.net_worth || 0;
+            if ((x.net_worth || 0) > s[6]) { s[6] = x.net_worth; s[7] = x.hero_id; }
+        });
+        for (var i = 2; i < 6; i++) s[i] = n ? Math.round(s[i] * 10 / n) / 10 : 0;
+        for (var j = 0; j < n; j++) {
+            var w = l[j].player_match_outcome === 1;
+            if (j && w !== (l[0].player_match_outcome === 1)) break;
+            s[9] += w ? 1 : -1;
+        }
+        return s;
+    }
+    function row(x) { return [x.hero_id, 0, x.player_match_outcome, x.match_duration_s, x.player_kills, x.player_deaths, x.player_assists, x.net_worth, String(x.match_id)]; }
     function sorted(list) { return list.slice().sort(function (p, q) { return q.start_time - p.start_time; }); }
     // Страница матчей игрока (все герои или один). История хранится здесь: в заголовок вся не влезет.
     function matches(acc, page, hero) {
         function send(list) {
             var f = hero ? list.filter(function (x) { return x.hero_id === hero; }) : list;
-            document.title = "MODDL:PFM:" + acc + ":" + JSON.stringify({ m: f.slice(page * PAGE, page * PAGE + PAGE).map(row), n: f.length, p: page, hero: hero });
+            document.title = "MODDL:PFM:" + acc + ":" + JSON.stringify({ m: f.slice(page * PAGE, page * PAGE + PAGE).map(row), n: f.length, p: page, hero: hero, s: summary(f) });
         }
         if (history[acc]) { send(history[acc]); return; }
         fetch("https://api.deadlock-api.com/v1/players/" + acc + "/match-history").then(function (r) {
@@ -78,12 +95,13 @@
         Promise.all([get("/hero-stats"), get("/match-history")]).then(function (v) {
             var heroes = v[0].map(function (x) {
                 var m = (x.time_played || 0) / 60;
-                return [x.hero_id, x.matches_played, x.wins, x.time_played, x.kills, x.deaths, x.assists,
-                    R(x.last_hits_per_min * m), R(x.denies_per_min * m), R(x.networth_per_min * m),
-                    x.total_player_damage, R(x.obj_damage_per_min * m), R(x.accuracy * 100), R(x.crit_shot_rate * 100)];
+                return [x.hero_id, x.matches_played, x.wins, R(m), x.kills, x.deaths, x.assists,
+                    R(x.last_hits_per_min * m), R(x.denies_per_min * m), R(x.networth_per_min * m / 100),
+                    R(x.total_player_damage / 100), R(x.obj_damage_per_min * m / 100), R(x.accuracy * 100), R(x.crit_shot_rate * 100),
+                    (x.mvp_rank_counts || [0])[0], x.mvp_rated_matches === x.matches_played ? 0 : (x.mvp_rated_matches || 0), R(x.damage_taken_per_min * m / 100), x.permanent_buffs || 0, R(x.avg_first_permanent_buff_time_s / 10)];
             });
             history[acc] = sorted(v[1]);
-            document.title = "MODDL:PF:" + acc + ":" + JSON.stringify({ h: heroes, m: history[acc].slice(0, PAGE).map(row), n: v[1].length });
+            document.title = "MODDL:PF:" + acc + ":" + JSON.stringify({ h: heroes, m: history[acc].slice(0, PAGE).map(row), n: v[1].length, s: summary(history[acc]) });
         }).catch(function (e) {
             document.title = "MODDL:PF:" + acc + ":ERR:" + e;
         });
