@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self'; connect-src https://api.deadlock-api.com;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self'; connect-src https://api.deadlock-api.com https://deadlock.wiki https://translate.googleapis.com;">
 <title>MODDL:INIT</title>
 </head>
 <body>
@@ -12,8 +12,79 @@
   1) Хранит настройки в localStorage — на компьютере игрока, никуда не отправляя.
   2) (Раньше проигрывал озвучку moDL+ — она удалена, список звуков пуст.)
   3) Для функции «Профили игроков» запрашивает у api.deadlock-api.com публичную статистику игрока,
-     чей профиль открыт. Других адресов браузер этой странице открывать не даст (см. connect-src выше).
+     чей профиль открыт.
+  4) Для функции «Изменения героя» читает с deadlock.wiki историю изменений героев (страницы
+     «<Герой>/Update history») — только обновления новее тех, что уже есть в моде,
+     и переводит тексты изменений (патчноуты Valve — только английские) Google Переводчиком;
+     переводы запоминает в localStorage, чтобы не переводить одно и то же снова.
+  Других адресов браузер этой странице открывать не даст (см. connect-src выше).
 -->
+<script>
+// Разбор страниц вики — точная копия tools/hero_changes_parse.js (проверяет tests/ui_smoke.test.js).
+// Разбор страницы «<Герой>/Update history» с deadlock.wiki (вики-разметка) в строки истории.
+// Один и тот же код — при сборке (tools/gen_hero_changes.js) и на странице-хранилище
+// (bridge/moddl_bridge.html, свежие обновления прямо в игре), поэтому без новых возможностей JS.
+// Результат: [["2026-10-30", ["строка", …]], …] — новые даты первыми. Пометки в строке:
+// ⟦Способность⟧, ⟪u⟫ — нет в патчноутах (нашли сами), ⟪+⟫ / ⟪-⟫ — усиление / ослабление.
+(function (root) {
+    "use strict";
+    var MONTHS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+
+    var cleanLine = function (s) {
+        return String(s)
+            .replace(/<ref[\s\S]*?(<\/ref>|\/>)/gi, "")
+            .replace(/<br\s*\/?>/gi, " ")
+            .replace(/<[^>]+>/g, "")
+            .replace(/\{\{\s*AbilityIcon\s*\|\s*([^|}]+)[^}]*\}\}/gi, function (_, n) { return "⟦" + n.trim() + "⟧"; })
+            .replace(/\{\{\s*Undocumented\s*\}\}/gi, "⟪u⟫")
+            .replace(/'''\(Undocumented\)'''/gi, "⟪u⟫")
+            .replace(/\{\{\s*Change\s*\|\s*buff\s*\}\}/gi, "⟪+⟫")
+            .replace(/\{\{\s*Change\s*\|\s*nerf\s*\}\}/gi, "⟪-⟫")
+            .replace(/\{\{\s*Change\s*\|[^}]*\}\}/gi, "")
+            .replace(/\{\{\s*sic\s*\}\}/gi, "")
+            .replace(/\{\{\s*(?:ItemIcon|HeroIcon|EntityIcon|PageRef)\s*\|\s*([^|}]+)[^}]*\}\}/gi, function (_, n) { return n.trim(); })
+            .replace(/\{\{[^{}]*\}\}/g, "")
+            .replace(/\[\[(?:Category|File|Image):[^\]]*\]\]/gi, "")
+            .replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, "$1")
+            .replace(/\[\[([^\]]*)\]\]/g, "$1")
+            .replace(/'''?/g, "")
+            .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+            .replace(/\s+/g, " ")
+            .trim();
+    };
+
+    var parsePage = function (text) {
+        var out = [];
+        var parts = String(text || "").split(/\{\{\s*Update history table\/row/i).slice(1);
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            var d = /\{\{\s*Update[ _]link\s*\|\s*([A-Za-z]+)\s*\|\s*(\d{1,2})\s*\|\s*(\d{4})/.exec(p);
+            if (!d || !MONTHS[d[1].toLowerCase()]) continue;
+            var date = d[3] + "-" + pad(MONTHS[d[1].toLowerCase()]) + "-" + pad(parseInt(d[2], 10));
+            var at = p.search(/\|\s*changes\s*=/i);
+            if (at < 0) continue;
+            var lines = [];
+            var rows = p.slice(at).split(/\r?\n/);
+            for (var k = 0; k < rows.length; k++) {
+                var m = /^\s*(\*+)\s*(.*)$/.exec(rows[k]);
+                if (!m) continue;
+                var t = cleanLine(m[2]);
+                // Строка-заголовок вроде «Street Brawl:» без текста под ней не нужна; вложенные — с отступом.
+                if (!t || /^⟪u⟫$/.test(t)) continue;
+                lines.push((m[1].length > 1 ? "  " : "") + t);
+            }
+            if (lines.length) out.push([date, lines]);
+        }
+        out.sort(function (a, b) { return a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0; });
+        return out;
+    };
+
+    var api = { parsePage: parsePage, cleanLine: cleanLine };
+    if (typeof module !== "undefined" && module.exports) module.exports = api;
+    else root.ModdlHeroChanges = api;
+})(this);
+</script>
 <script>
 (function () {
     "use strict";
@@ -107,6 +178,84 @@
         });
     }
 
+    // «Изменения героя»: свежие обновления с вики. Ответ длинный — частями по 1800 символов:
+    // MODDL:HC:<номер>:<1 — есть ещё / 0 — конец>:<кусок>; следующий кусок — команда hcp.
+    var HC_API = "https://deadlock.wiki/api.php?action=query&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&formatversion=2&origin=*&titles=";
+    var hcText = "";
+    function hcSend(id, off) {
+        document.title = "MODDL:HC:" + id + ":" + (off + 1800 < hcText.length ? 1 : 0) + ":" + hcText.substr(off, 1800);
+    }
+    function heroChanges(id, since, heroes) {
+        var byTitle = {}, titles = [];
+        heroes.forEach(function (h) { if (h && /^\d+$/.test(String(h[0])) && typeof h[1] === "string") { byTitle[h[1] + "/Update history"] = h[0]; titles.push(h[1] + "/Update history"); } });
+        var parts = [];
+        for (var i = 0; i < titles.length; i += 25) parts.push(titles.slice(i, i + 25));
+        Promise.all(parts.map(function (p) {
+            return fetch(HC_API + p.map(encodeURIComponent).join("|")).then(function (r) {
+                if (!r.ok) throw "HTTP " + r.status;
+                return r.json();
+            });
+        })).then(function (all) {
+            var out = {};
+            all.forEach(function (j) {
+                var redirect = {};
+                ((j.query && j.query.redirects) || []).forEach(function (x) { redirect[x.to] = x.from; });
+                ((j.query && j.query.pages) || []).forEach(function (pg) {
+                    var hero = byTitle[pg.title] || byTitle[redirect[pg.title]];
+                    if (!hero || pg.missing || !pg.revisions) return;
+                    var rows = ModdlHeroChanges.parsePage(pg.revisions[0].slots.main.content).filter(function (r) { return r[0] > since; });
+                    if (rows.length) out[hero] = rows;
+                });
+            });
+            hcText = JSON.stringify({ heroes: out });
+            hcSend(id, 0);
+        }).catch(function (e) {
+            hcText = JSON.stringify({ err: String(e) });
+            hcSend(id, 0);
+        });
+    }
+
+    // «Изменения героя»: машинный перевод строк. Ответ — частями, как у «hc»: MODDL:TR:<номер>:<1|0>:<кусок>.
+    var TR_API = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=en&tl=";
+    var trText = "";
+    function trSend(id, off) {
+        document.title = "MODDL:TR:" + id + ":" + (off + 1800 < trText.length ? 1 : 0) + ":" + trText.substr(off, 1800);
+    }
+    function trCache(lang) {
+        var c = {};
+        try { c = JSON.parse(localStorage.getItem("moddl_tr_" + lang) || "{}") || {}; } catch (e) { c = {}; }
+        return c;
+    }
+    // Один запрос — несколько строк через перевод строки; ответ Google — куски [перевод, оригинал, …].
+    function googleText(lang, text) {
+        return fetch(TR_API + encodeURIComponent(lang) + "&q=" + encodeURIComponent(text)).then(function (r) {
+            if (!r.ok) throw "HTTP " + r.status;
+            return r.json();
+        }).then(function (j) {
+            // Без невидимых символов (переводчик вставляет \u200b).
+            return ((j && j[0]) || []).map(function (seg) { return seg && seg[0] ? seg[0] : ""; }).join("").replace(/[\u200b\u200c\u200d\ufeff]/g, "");
+        });
+    }
+    function translateLines(id, lang, lines) {
+        var cache = trCache(lang), need = lines.filter(function (l, i) { return !cache[l] && lines.indexOf(l) === i; });
+        var joined = need.join("\n");
+        var done = function () {
+            try { localStorage.setItem("moddl_tr_" + lang, JSON.stringify(cache)); } catch (e) {}
+            trText = JSON.stringify({ t: lines.map(function (l) { return cache[l] || ""; }) });
+            trSend(id, 0);
+        };
+        if (!need.length) { done(); return; }
+        googleText(lang, joined).then(function (out) {
+            var parts = out.split("\n");
+            // Строк столько же — раскладываем; иначе (переводчик склеил строки) — переводим по одной.
+            if (parts.length === need.length) { need.forEach(function (l, i) { cache[l] = parts[i].trim(); }); done(); return; }
+            return Promise.all(need.map(function (l) { return googleText(lang, l).then(function (t) { cache[l] = t.trim(); }); })).then(done);
+        }).catch(function (e) {
+            trText = JSON.stringify({ err: String(e) });
+            trSend(id, 0);
+        });
+    }
+
     function handle() {
         var raw = location.hash ? location.hash.slice(1) : "";
         if (!raw) return;
@@ -117,6 +266,14 @@
             if (/^\d+$/.test(String(msg.acc))) profile(String(msg.acc));
         } else if (msg.op === "matches") {
             if (/^\d+$/.test(String(msg.acc))) matches(String(msg.acc), Math.max(0, Number(msg.page) || 0), Number(msg.hero) || 0);
+        } else if (msg.op === "hc") {
+            if (Array.isArray(msg.heroes)) heroChanges(msg.id, /^\d{4}-\d\d-\d\d$/.test(String(msg.since)) ? String(msg.since) : "", msg.heroes);
+        } else if (msg.op === "tr") {
+            if (Array.isArray(msg.q) && /^[a-zA-Z-]{2,5}$/.test(String(msg.lang))) translateLines(msg.id, String(msg.lang), msg.q.map(String).slice(0, 80));
+        } else if (msg.op === "trp") {
+            trSend(msg.id, Math.max(0, Number(msg.off) || 0));
+        } else if (msg.op === "hcp") {
+            hcSend(msg.id, Math.max(0, Number(msg.off) || 0));
         } else if (msg.op === "play") {
             reply(msg.id, "play", play(String(msg.name), msg.vol));
         } else if (!storageOk) {
