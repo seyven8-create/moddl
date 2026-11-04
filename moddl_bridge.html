@@ -259,6 +259,46 @@
         });
     }
 
+    // «Рейтинг»: ранговые матчи игрока (новые первыми), его ранг и даты сезона с deadlock-api.com.
+    // Ответ — частями, как у «hc»: MODDL:RK2:<номер>:<откуда дальше|0>:<кусок>; следующий кусок — команда rkp.
+    // Матч: [номер, начало, герой, победа 1/0, очки ранга за матч, убийства, смерти, помощь, калибровка 1/0, длительность].
+    var rkText = "";
+    function rkSend(id, off) {
+        document.title = "MODDL:RK2:" + id + ":" + (off + 1800 < rkText.length ? off + 1800 : 0) + ":" + rkText.substr(off, 1800);
+    }
+    function ranked(id, acc) {
+        var API = "https://api.deadlock-api.com/v1/";
+        function get(url) {
+            return fetch(url).then(function (r) {
+                if (!r.ok) throw "HTTP " + r.status;
+                return r.json();
+            });
+        }
+        Promise.all([
+            get(API + "players/" + acc + "/match-history"),
+            get(API + "players/" + acc + "/rank").catch(function () { return null; }),
+            get(API + "assets/ranked-seasons").catch(function () { return []; })
+        ]).then(function (v) {
+            var m = (v[0] || []).filter(function (x) { return x.match_mode === 4; }).sort(function (a, b) { return b.start_time - a.start_time; }).slice(0, 600).map(function (x) {
+                return [x.match_id, x.start_time, x.hero_id, x.match_result === x.player_team ? 1 : 0, x.ranked_delta || 0,
+                    x.player_kills || 0, x.player_deaths || 0, x.player_assists || 0, x.ranked_calibration_match ? 1 : 0, x.match_duration_s || 0];
+            });
+            var s = [], g = 0, c = 0;
+            (v[2] || []).forEach(function (se) {
+                (se.intervals || []).forEach(function (iv) { s.push({ n: se.name || "", a: iv.start_timestamp, b: iv.end_timestamp }); });
+                if (se.base_win_loss_point_grant) g = se.base_win_loss_point_grant;
+                if (se.calibration_matches) c = se.calibration_matches;
+            });
+            var lm = v[1] && v[1].last_match;
+            var r = lm ? { b: v[1].badge || 0, f: lm.player_rank_final_flat_progress, at: lm.start_time } : null;
+            rkText = JSON.stringify({ m: m, s: s, r: r, g: g, c: c });
+            rkSend(id, 0);
+        }).catch(function (e) {
+            rkText = JSON.stringify({ err: String(e) });
+            rkSend(id, 0);
+        });
+    }
+
     function handle() {
         var raw = location.hash ? location.hash.slice(1) : "";
         if (!raw) return;
@@ -275,6 +315,10 @@
             if (Array.isArray(msg.q) && /^[a-zA-Z-]{2,5}$/.test(String(msg.lang))) translateLines(msg.id, String(msg.lang), msg.q.map(String).slice(0, 80));
         } else if (msg.op === "trp") {
             trSend(msg.id, Math.max(0, Number(msg.off) || 0));
+        } else if (msg.op === "rk") {
+            if (/^\d+$/.test(String(msg.acc))) ranked(msg.id, String(msg.acc));
+        } else if (msg.op === "rkp") {
+            rkSend(msg.id, Math.max(0, Number(msg.off) || 0));
         } else if (msg.op === "hcp") {
             hcSend(msg.id, Math.max(0, Number(msg.off) || 0));
         } else if (msg.op === "play") {
