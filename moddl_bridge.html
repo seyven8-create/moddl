@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self'; connect-src https://api.deadlock-api.com https://deadlock.wiki https://translate.googleapis.com;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; media-src 'self'; connect-src https://api.deadlock-api.com https://deadlock.wiki https://translate.googleapis.com https://kxvvbveknqgguwvsqbjz.supabase.co;">
 <title>MODDL:INIT</title>
 </head>
 <body>
@@ -17,6 +17,9 @@
      «<Герой>/Update history») — только обновления новее тех, что уже есть в моде,
      и переводит тексты изменений (патчноуты Valve — только английские) Google Переводчиком;
      переводы запоминает в localStorage, чтобы не переводить одно и то же снова.
+  5) Для функции «Рейтинг» запрашивает у api.deadlock-api.com ранговые матчи и ранг игрока.
+  6) Для «Заметок других игроков» читает и (если игрок включил «Делиться») пишет заметки в общую базу
+     moDL+ на Supabase — анонимно: вместо автора уходит хеш случайного секрета этой установки.
   Других адресов браузер этой странице открывать не даст (см. connect-src выше).
 -->
 <script>
@@ -269,8 +272,9 @@
     }
     function ranked(id, acc) {
         var API = "https://api.deadlock-api.com/v1/";
+        // Без кеша браузера: иначе после смены сезона приходят вчерашние ранг и даты сезона.
         function get(url) {
-            return fetch(url).then(function (r) {
+            return fetch(url, { cache: "no-store" }).then(function (r) {
                 if (!r.ok) throw "HTTP " + r.status;
                 return r.json();
             });
@@ -305,6 +309,53 @@
         });
     }
 
+    // «Заметки других игроков»: общая база в Supabase (таблицы и функции — tools/supabase_notes.sql).
+    // Ключ anon публичный: таблицы для него закрыты, доступны только функции mdl_get / mdl_set / mdl_report.
+    // Автор заметки — случайный секрет этой установки (localStorage), в базу уходит только его хеш.
+    // Ответ — частями, как у «hc»: MODDL:SN2:<номер>:<откуда дальше|0>:<кусок>; следующий кусок — команда snp.
+    var SN_URL = "https://kxvvbveknqgguwvsqbjz.supabase.co/rest/v1/rpc/";
+    var SN_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dnZidmVrbnFnZ3V3dnNxYmp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM5MTMzODIsImV4cCI6MjEwOTQ4OTM4Mn0.Q914hnb_v5pLzaKifg3mDmTjvMuDr2p9bDfdrRyQBuo";
+    var snText = "";
+    function snSend(id, off) {
+        document.title = "MODDL:SN2:" + id + ":" + (off + 1800 < snText.length ? off + 1800 : 0) + ":" + snText.substr(off, 1800);
+    }
+    function snToken() {
+        var t = "";
+        try { t = localStorage.getItem("moddl_sn_token") || ""; } catch (e) { t = ""; }
+        if (/^[0-9a-f]{48}$/.test(t)) return t;
+        var a = new Uint8Array(24);
+        crypto.getRandomValues(a);
+        t = Array.prototype.map.call(a, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+        try { localStorage.setItem("moddl_sn_token", t); } catch (e) {}
+        return t;
+    }
+    function snCall(fn, body) {
+        return fetch(SN_URL + fn, {
+            method: "POST", cache: "no-store",
+            headers: { "apikey": SN_KEY, "Authorization": "Bearer " + SN_KEY, "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        }).then(function (r) {
+            if (!r.ok) throw "HTTP " + r.status;
+            return r.text();
+        }).then(function (t) { return t ? JSON.parse(t) : null; });
+    }
+    function sharedNotes(id, msg) {
+        var done = function (o) { snText = JSON.stringify(o); snSend(id, 0); };
+        var acc = Number(msg.acc) || 0, p;
+        if (msg.q === "get" && acc > 0) {
+            p = snCall("mdl_get", { p_target: acc, p_token: snToken() }).then(function (rows) {
+                done({ acc: String(acc), n: (rows || []).map(function (r) { return [r.id, r.body, Math.round(Date.parse(r.created_at) / 1000), r.mine ? 1 : 0]; }) });
+            });
+        } else if (msg.q === "set" && acc > 0 && Array.isArray(msg.t)) {
+            p = snCall("mdl_set", { p_token: snToken(), p_target: acc, p_bodies: msg.t.slice(0, 3).map(function (x) { return String(x).slice(0, 120); }) }).then(function (n) {
+                done({ acc: String(acc), ok: Number(n) || 0 });
+            });
+        } else if (msg.q === "rep" && Number(msg.note) > 0) {
+            p = snCall("mdl_report", { p_token: snToken(), p_note: Number(msg.note) }).then(function () { done({ ok: 1, note: Number(msg.note) }); });
+        } else { done({ err: "bad request" }); return; }
+        p.catch(function (e) { done({ err: String(e), acc: String(acc) }); });
+    }
+
     function handle() {
         var raw = location.hash ? location.hash.slice(1) : "";
         if (!raw) return;
@@ -321,6 +372,10 @@
             if (Array.isArray(msg.q) && /^[a-zA-Z-]{2,5}$/.test(String(msg.lang))) translateLines(msg.id, String(msg.lang), msg.q.map(String).slice(0, 80));
         } else if (msg.op === "trp") {
             trSend(msg.id, Math.max(0, Number(msg.off) || 0));
+        } else if (msg.op === "sn") {
+            sharedNotes(msg.id, msg);
+        } else if (msg.op === "snp") {
+            snSend(msg.id, Math.max(0, Number(msg.off) || 0));
         } else if (msg.op === "rk") {
             if (/^\d+$/.test(String(msg.acc))) ranked(msg.id, String(msg.acc));
         } else if (msg.op === "rkp") {
