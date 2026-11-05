@@ -262,6 +262,7 @@
     // «Рейтинг»: ранговые матчи игрока (новые первыми), его ранг и даты сезона с deadlock-api.com.
     // Ответ — частями, как у «hc»: MODDL:RK2:<номер>:<откуда дальше|0>:<кусок>; следующий кусок — команда rkp.
     // Матч: [номер, начало, герой, победа 1/0, очки ранга за матч, убийства, смерти, помощь, калибровка 1/0, длительность].
+    // Сезон: { n — название, a/b — начало и конец, x — цена подрангов, g — очки за матч, c — калибровочных матчей }.
     var rkText = "";
     function rkSend(id, off) {
         document.title = "MODDL:RK2:" + id + ":" + (off + 1800 < rkText.length ? off + 1800 : 0) + ":" + rkText.substr(off, 1800);
@@ -285,7 +286,12 @@
             });
             var s = [], g = 0, c = 0;
             (v[2] || []).forEach(function (se) {
-                (se.intervals || []).forEach(function (iv) { s.push({ n: se.name || "", a: iv.start_timestamp, b: iv.end_timestamp }); });
+                // Правила сезона: цена подрангов (sub_rank_xp), очки за матч, число калибровочных матчей.
+                var xp = se.rank_info && se.rank_info[0] && se.rank_info[0].sub_rank_xp;
+                (se.intervals || []).forEach(function (iv) {
+                    s.push({ n: se.name || "", a: iv.start_timestamp, b: iv.end_timestamp, x: Array.isArray(xp) ? xp : null,
+                        g: se.base_win_loss_point_grant || 0, c: se.calibration_matches || 0 });
+                });
                 if (se.base_win_loss_point_grant) g = se.base_win_loss_point_grant;
                 if (se.calibration_matches) c = se.calibration_matches;
             });
